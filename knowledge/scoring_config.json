@@ -1,0 +1,23 @@
+{
+  "signal_weights": {
+    "absentee_owner": 8,
+    "out_of_state_mailing": 8,
+    "probate": 18,
+    "foreclosure": 20,
+    "tax_delinquent": 15,
+    "vacancy": 14,
+    "long_ownership": 10,
+    "condition_evidence": 15
+  },
+  "opportunity_weights": {
+    "motivation": 20,
+    "deal_economics": 25,
+    "buyer_demand": 15,
+    "equity": 10,
+    "property_quality": 8,
+    "marketability": 7,
+    "distress_momentum": 5,
+    "data_confidence": 10
+  },
+  "tier_thresholds": {"A+": 95, "A": 90, "B": 80, "C": 70, "D": 60}
+}

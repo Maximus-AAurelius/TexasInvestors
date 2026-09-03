@@ -32,6 +32,33 @@ python scripts\hcad_top_absentee_leads.py
 python run.py --manual-csv output\hcad_top_absentee_leads.csv
 ```
 
+## Open the lead dashboard on a phone
+
+The current project is a local Python pipeline, so the read-only dashboard
+uses the CSV records already produced by the pipeline. From this folder run:
+
+```powershell
+python app.py
+ipconfig
+```
+
+On a phone connected to the same Wi-Fi, open `http://<IPv4-address>:8765`.
+The dashboard shows the available owner, mailing-address, county, source, and
+absentee evidence. Value, debt, repairs, comps, and buyer demand are shown as
+unknown until those data sources are added. The map geocodes up to 25 visible
+addresses when you press **Load map points** and caches successful lookups in
+`output\geocode_cache.json`.
+
+The structured profile and initial signal weights live in
+`intelligence.py` and `knowledge\scoring_config.json`. Edit the JSON weights
+to test a different evidence policy; unsupported economic scores remain
+`UNKNOWN` until verified valuation, debt, repair, and buyer data are available.
+
+When `data\hcad\real_acct.txt` is present, the app joins matching lead
+addresses to HCAD records and caches the extracted profiles in
+`output\hcad_lead_profiles.json`. HCAD market value is displayed as an
+appraisal-source fact, not as an independent current-market or ARV estimate.
+
 Output lands in `output\leads_<timestamp>.docx` — sorted by distress
 score descending, with Address / Owner / Distress Score / Sources Hit
 columns. It's a normal Word table: open it and edit freely (add a Notes

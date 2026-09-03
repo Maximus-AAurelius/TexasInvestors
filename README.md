@@ -59,6 +59,18 @@ addresses to HCAD records and caches the extracted profiles in
 `output\hcad_lead_profiles.json`. HCAD market value is displayed as an
 appraisal-source fact, not as an independent current-market or ARV estimate.
 
+The app also maintains a local intelligence history database at
+`audit_logs\intelligence.db`. It stores canonical properties, source-file
+provenance, current profiles, changed score snapshots, and lead status actions.
+The database is local-only for now and is safe to replace with Supabase after
+the property schema and valuation workflow are settled.
+
+Each property detail view now includes a **Manual underwriting** panel. Enter
+current value, ARV low/base/high, repairs low/expected/high, estimated debt,
+buyer price, contract price, and assumptions. These values are stored locally
+in `audit_logs\intelligence.db` as underwriting inputs and are not presented as
+verified public-record facts.
+
 Output lands in `output\leads_<timestamp>.docx` — sorted by distress
 score descending, with Address / Owner / Distress Score / Sources Hit
 columns. It's a normal Word table: open it and edit freely (add a Notes

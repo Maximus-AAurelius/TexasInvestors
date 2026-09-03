@@ -4,6 +4,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from deal_analysis import calculate_deal
+
 ROOT = Path(__file__).parent
 DEFAULT_CONFIG_PATH = ROOT / "knowledge" / "scoring_config.json"
 
@@ -49,6 +51,7 @@ class PropertyProfile:
     property_facts: dict[str, Any]
     scores: dict[str, Optional[int]]
     explanations: dict[str, list[str]]
+    deal: dict[str, Any]
     data_gaps: list[str]
     recommendation: str
     model_version: str = "rules-v1"
@@ -115,11 +118,12 @@ def build_profile(lead: dict[str, Any], config: Optional[ScoringConfig] = None) 
         "data_confidence": [f"{len(sources)} source record(s) attached", "Mailing address is available" if mailing else "Mailing address is unknown", "HCAD parcel record matched" if hcad else "HCAD parcel record not matched"],
         "opportunity": ["Not calculated: valuation, equity, repairs, buyer demand, and deal economics are unavailable"],
     }
+    deal = calculate_deal(lead.get("underwriting", {}))
     return PropertyProfile(
         property_id=lead["id"], address=lead["address"], county=lead["county"],
         owner_name=lead["owner_name"], mailing_address=mailing, sources=sources,
         source_files=list(lead.get("source_files", [])),
         data_states={"identity": "VERIFIED", "mailing_address": "VERIFIED" if mailing else "UNKNOWN", "motivation": "INFERRED"},
-        signals=signals, property_facts=hcad, scores=scores, explanations=explanations, data_gaps=gaps,
+        signals=signals, property_facts=hcad, scores=scores, explanations=explanations, deal=deal, data_gaps=gaps,
         recommendation="RESEARCH FIRST", calculated_at=lead.get("calculated_at", ""),
     )

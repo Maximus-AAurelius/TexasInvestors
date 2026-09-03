@@ -6,17 +6,20 @@ import os
 import threading
 import urllib.parse
 import urllib.request
+from io import StringIO
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from intelligence import build_profile
 from hcad_profile import enrich_leads
+from intelligence_db import get_underwritings, record_action, save_profiles, save_underwriting
 
 ROOT = Path(__file__).parent
 WEB_DIR = ROOT / "web"
 OUTPUT_DIR = ROOT / "output"
 GEOCODE_CACHE = OUTPUT_DIR / "geocode_cache.json"
+STATUS_PATH = OUTPUT_DIR / "lead_status.json"
 HOST = os.environ.get("TX_APP_HOST", "0.0.0.0")
 PORT = int(os.environ.get("TX_APP_PORT", "8765"))
 _cache_lock = threading.Lock()
@@ -29,8 +32,16 @@ def _read_cache():
         return {}
 
 
+def _read_statuses():
+    try:
+        return json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
 def load_leads():
     leads = {}
+    statuses = _read_statuses()
     for path in sorted(ROOT.glob("**/*.csv")):
         if any(part in {".git", ".venv", "__pycache__"} for part in path.parts):
             continue
@@ -50,6 +61,7 @@ def load_leads():
                         "sources": set(),
                         "source_files": set(),
                         "raw": {},
+                                    "status": statuses.get(key, "new"),
                     })
                     source = (row.get("source_type") or path.stem).strip()
                     lead["sources"].add(source)
@@ -76,9 +88,12 @@ def load_leads():
             "unknowns": ["Property value", "Outstanding debt", "Repairs", "Comparable sales", "Buyer demand"],
         })
     hcad_profiles = enrich_leads(result)
+    underwritings = get_underwritings()
     for lead in result:
         lead["hcad"] = hcad_profiles.get(lead["id"], {})
+        lead["underwriting"] = underwritings.get(lead["id"], {})
         lead["intelligence"] = build_profile(lead).to_dict()
+    save_profiles(result)
     return sorted(result, key=lambda item: (-item["evidence_score"], item["address"]))
 
 
@@ -93,18 +108,58 @@ def json_response(handler, payload, status=200):
 
 
 class AppHandler(BaseHTTPRequestHandler):
+    def _request_body(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            return json.loads(self.rfile.read(length).decode("utf-8"))
+        except (ValueError, UnicodeError, json.JSONDecodeError):
+            return None
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/api/leads":
             leads = load_leads()
-            query = urllib.parse.parse_qs(parsed.query).get("q", [""])[0].lower().strip()
+            params = urllib.parse.parse_qs(parsed.query)
+            query = params.get("q", [""])[0].lower().strip()
             if query:
                 leads = [lead for lead in leads if query in json.dumps(lead).lower()]
+            status = params.get("status", [""])[0].lower().strip()
+            if status:
+                leads = [lead for lead in leads if lead["status"] == status]
+            out_of_state = params.get("out_of_state", [""])[0].lower().strip()
+            if out_of_state == "true":
+                leads = [lead for lead in leads if lead["out_of_state"]]
+            property_class = params.get("property_class", [""])[0].upper().strip()
+            if property_class:
+                leads = [lead for lead in leads if lead.get("hcad", {}).get("property_type") == property_class]
+            min_value = params.get("min_value", [""])[0].strip()
+            if min_value:
+                try:
+                    floor = float(min_value)
+                    leads = [lead for lead in leads if (lead.get("hcad", {}).get("hcad_market_value") or 0) >= floor]
+                except ValueError:
+                    pass
             return json_response(self, {
                 "generated_at": datetime.now().isoformat(timespec="seconds"),
                 "count": len(leads),
                 "leads": leads,
             })
+        if parsed.path == "/api/export":
+            output = StringIO()
+            fields = ["address", "owner_name", "county", "status", "sources", "mailing_address", "parcel_id", "property_type", "building_sqft", "year_improved", "lot_acres", "hcad_market_value", "ownership_duration_years"]
+            writer = csv.DictWriter(output, fieldnames=fields)
+            writer.writeheader()
+            for lead in load_leads():
+                facts = lead.get("hcad", {})
+                writer.writerow({field: ", ".join(lead[field]) if field == "sources" else facts.get(field, lead.get(field, "")) for field in fields})
+            body = output.getvalue().encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv; charset=utf-8")
+            self.send_header("Content-Disposition", "attachment; filename=texas_investors_leads.csv")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if parsed.path == "/api/geocode":
             address = urllib.parse.parse_qs(parsed.query).get("address", [""])[0].strip()
             if not address:
@@ -133,6 +188,42 @@ class AppHandler(BaseHTTPRequestHandler):
         if parsed.path == "/" or parsed.path == "/index.html":
             return self.serve_file(WEB_DIR / "index.html")
         return self.serve_file(WEB_DIR / parsed.path.lstrip("/"))
+
+    def do_POST(self):
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/underwriting":
+            payload = self._request_body()
+            if not isinstance(payload, dict) or not payload.get("id") or not isinstance(payload.get("underwriting"), dict):
+                return json_response(self, {"error": "id and underwriting object are required"}, 400)
+            fields = ("current_value", "arv_low", "arv_base", "arv_high", "repairs_low", "repairs_expected", "repairs_high", "estimated_debt", "transaction_costs", "buyer_margin", "risk_adjustment", "buyer_price", "contract_price")
+            underwriting = {"assumptions": str(payload["underwriting"].get("assumptions", "")).strip()}
+            for field in fields:
+                value = payload["underwriting"].get(field)
+                if value in (None, ""):
+                    underwriting[field] = None
+                    continue
+                try:
+                    number = float(value)
+                except (TypeError, ValueError):
+                    return json_response(self, {"error": f"{field} must be numeric"}, 400)
+                if number < 0:
+                    return json_response(self, {"error": f"{field} cannot be negative"}, 400)
+                underwriting[field] = number
+            save_underwriting(payload["id"], underwriting)
+            return json_response(self, {"id": payload["id"], "underwriting": underwriting})
+        if parsed.path != "/api/status":
+            self.send_error(404)
+            return
+        payload = self._request_body()
+        if not isinstance(payload, dict) or not payload.get("id") or payload.get("status") not in {"new", "researching", "saved", "contacted", "skipped"}:
+            return json_response(self, {"error": "id and a valid status are required"}, 400)
+        with _cache_lock:
+            statuses = _read_statuses()
+            statuses[payload["id"]] = payload["status"]
+            OUTPUT_DIR.mkdir(exist_ok=True)
+            STATUS_PATH.write_text(json.dumps(statuses, indent=2), encoding="utf-8")
+            record_action(payload["id"], payload["status"])
+        return json_response(self, {"id": payload["id"], "status": payload["status"]})
 
     def serve_file(self, path):
         try:

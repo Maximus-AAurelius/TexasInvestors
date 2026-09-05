@@ -50,6 +50,7 @@ def load_manual_csv(path: str) -> List[LeadRecord]:
                     case_no=row.get("case_no") or None,
                     sale_date=_parse_date(row.get("sale_date", "").strip()),
                     mailing_address=row.get("mailing_address") or None,
+                    source_url=row.get("source_url") or None,
                 ))
             except ValueError as exc:
                 print(f"[manual_import] skipping bad row in {Path(path).name}: {row!r} ({exc})")

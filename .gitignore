@@ -6,3 +6,9 @@ output/
 audit_logs/*.db
 .pytest_cache/
 data/hcad/
+data/imports/
+audit_logs/
+*.pem
+.env
+.env.*
+!.env.example

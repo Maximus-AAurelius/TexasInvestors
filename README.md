@@ -1,3 +1,171 @@
+# Texas Investors ? local property research edition
+
+## Confirmed markets and strategy
+
+Purchase-contract assignments in **Harris (primary), Fort Bend, Montgomery,
+Brazoria, Galveston, Waller, Liberty, Chambers, and Nacogdoches**. The Houston-area
+scope follows [H-GAC's eight-county planning area](https://www.h-gac.com/regional-growth-forecast),
+with Nacogdoches additionally requested. Use the County filter in the explorer
+and select a county when saving buyer criteria. Imports accept these counties;
+HCAD enrichment remains strictly Harris-only. Other counties currently need
+manual CSV or saved HTML imports, not a connected feed. The Sources & workflow
+tab shows coverage and imported counts per county.
+
+## Start here (updated September 4, 2026)
+
+From this folder in PowerShell:
+
+```powershell
+.venv\Scripts\python.exe app.py
+```
+
+Open **http://127.0.0.1:8765**. You can also run `./Start-TexasInvestors.ps1`.
+The app is restricted to this computer. No API keys, paid subscriptions, external
+fonts or hosted scripts are required. Source links need internet access. For a
+fresh install, use Python 3.10+, create `.venv`, then install `requirements.txt`.
+The Playwright browser download is needed only for the existing live adapters
+and browser QA, not to browse the dashboard.
+
+- **Property explorer:** search/filter imported leads, review evidence and source
+  conflicts, save research status, and export the visible shortlist.
+- **Model the deal:** enter ARV/repair ranges and buyer costs. Gross assignment fee
+  is total buyer price minus seller contract price. Your net subtracts your own
+  assignment costs. Missing values stay unknown. Old `transaction_costs` inputs
+  now explicitly mean buyer closing/holding/financing costs; review old scenarios.
+- **Buyer criteria:** create, edit and delete local buyer profiles. Matches are
+  based on stated criteria and are not verified funds or purchase commitments.
+- **Due diligence:** record review checks and document references/dates in notes.
+  These are user assertions, not generated legal disclosures or certification.
+
+### Property photos and satellite / Street View
+
+Select a property, then use **Attach a property photo**. JPEG, PNG and WebP
+uploads up to 2 MB are validated and stored locally, with a source/caption and
+optional photo date. There is one cover photo per property; replacing it replaces
+the old photo. Images are resized and original metadata is removed.
+
+Use **Find address in Google Maps** to locate the property. Right-click the
+correct location, copy its latitude and longitude, and enter them under
+**Set satellite / Street View location**. The saved location enables external
+Satellite view and Street View links. No API key is needed. Imagery is viewed
+on Google Maps, not embedded in this app, and may be old or unavailable.
+
+Photo and location records are saved in `audit_logs/intelligence.db`; include it
+in backups. See [Product priorities](docs/product-roadmap.md) for the comparison
+and recommended next work.
+
+### Add records without a paid service
+
+The app reads CSV files directly in the project root, `output`, and `data/imports`.
+It no longer recursively scans test folders or arbitrary nested directories.
+Use `address,owner_name,county,source_type` columns. Source types are
+`absentee_owner`, `probate`, `trustee_sale`, and `tax_delinquent`; preserve
+`source_url`, `date_recorded`, `case_no`, and `retrieved_at` when available.
+
+For the full existing pipeline without network requests:
+
+```powershell
+.venv\Scripts\python.exe run.py --offline --manual-csv data\imports\leads.csv
+```
+
+### Optional Scrapling integration
+
+?Scrapley? was interpreted provisionally as [D4Vinci/Scrapling](https://github.com/D4Vinci/Scrapling),
+not [scrapy/scrapely](https://github.com/scrapy/scrapely). These are different libraries.
+The optional parser is pinned to 0.4.15 and was installed in this workspace.
+
+```powershell
+.venv\Scripts\python.exe -m pip install -r requirements-scraping.txt
+.venv\Scripts\python.exe scripts\import_saved_html.py saved-records.html --county Harris --source-type absentee_owner --source-url https://example.org/record-source --table "#records" --out data\imports\reviewed-records.csv
+```
+
+Replace the example URL with the actual source reference. This command parses a
+saved HTML table; it never fetches the URL or executes scripts. Recognized headers:
+Address / Property Address, Owner / Owner Name, Mailing Address, Case Number.
+Use a specific CSS table selector if multiple tables match. Unsupported layouts,
+ambiguous tables, empty results and invalid required fields fail explicitly.
+Review every imported identity. It does not OCR scanned notices or repair the
+existing foreclosure adapter's pagination limitation.
+
+### Market data lookup (RentCast + HCAD, one address at a time)
+
+Every property's detail view has a **Look up market data** button. It calls
+two connectors for that one address and saves the result to
+`audit_logs/intelligence.db`'s `property_lookups` table (upserted, so
+running it again on the same address updates that one row instead of
+duplicating it):
+
+- **RentCast** (`rentcast.py`, `get_comps(address)`) — an automated value
+  estimate and comparable sales/listings from RentCast's `/avm/value` API.
+  Get a free key at https://app.rentcast.io/app/api and set it before
+  starting the app:
+  ```powershell
+  $env:RENTCAST_API_KEY = "your-key-here"        # this PowerShell session only
+  setx RENTCAST_API_KEY "your-key-here"           # persists across sessions
+  ```
+  Without a key, the button still runs the HCAD half and reports the
+  missing-key error alongside whatever HCAD found — one connector failing
+  never blocks the other.
+- **HCAD** (`hcad_lookup.py`, `lookup_hcad(address)`) — Harris County only.
+  Checks the already-downloaded bulk roll (`data/hcad/real_acct.txt`) first
+  for the full field set (building sqft, year improved, lot acreage,
+  ownership-change date); if that file is missing or has no match, it falls
+  back to a live, unauthenticated ArcGIS query against HCAD's own public GIS
+  map service, which needs no download and stays current. A live Playwright
+  script against HCAD's actual account-search page (`search.hcad.org`) was
+  investigated first and found to be behind a Cloudflare bot challenge on
+  every request — the same category of explicit anti-bot gate this project
+  already declines to script around for the tax-delinquent CAPTCHA (see
+  `site_adapters/harris_tax.py`). See `hcad_lookup.py`'s module docstring for
+  the full investigation.
+
+Command line, for scripting or bulk one-off checks outside the dashboard:
+```powershell
+.venv\Scripts\python.exe lookup.py "10303 Greencreek Dr" --county Harris
+.venv\Scripts\python.exe lookup.py "10303 Greencreek Dr" --no-rentcast   # HCAD only, no API key needed
+```
+
+This is an automated estimate, not an appraisal or verified sale — the
+dashboard labels it that way and it does not feed into the manually-entered
+underwriting numbers automatically.
+
+### Data and release boundaries
+
+User underwriting and buyer profiles: `audit_logs/intelligence.db`.
+Statuses: `output/lead_status.json`. HCAD raw data: `data/hcad`.
+Back up these files and original CSV imports while the app is stopped. They contain
+local personal/business information and are not encrypted by this application.
+Existing historical CSVs are preserved; regenerate or review older inferred
+matches because the current matcher rejects ties that older versions accepted.
+
+This is a usable local research edition, not a hosted multi-user release. The
+foreclosure adapter remains incomplete; tax/Nacogdoches imports remain manual.
+No property is automatically certified as high-equity or profitable. Before
+commercial hosting, add authentication/authorization, a production HTTP stack,
+backup/restore verification, monitoring, dependency audits and data-rights review.
+
+Research: [Property sourcing and product strategy](docs/Texas-Investors-Research.docx).
+Implementation notes: [Completion plan](docs/implementation-plan.md).
+
+### Verification
+
+```powershell
+.venv\Scripts\python.exe -m pytest -q --basetemp output/test-run-new -p no:cacheprovider
+.venv\Scripts\python.exe scripts\verify_dashboard.py
+node --check web/app.js
+```
+
+Use a new empty basetemp path for each test run. Browser verification uses isolated
+user-state storage under `output/dashboard-qa-*`, with real source CSVs. Optional
+Scrapling tests skip if its extra requirements are absent.
+
+---
+
+## Existing pipeline documentation
+
+The historical implementation notes below describe the county pipeline. The
+local dashboard instructions and boundaries above take precedence.
+
 # TexasInvestors — TX Distress-Lead Pipeline (Harris & Nacogdoches County)
 
 Pulls public-record leads from Texas county government sites, matches
@@ -30,24 +198,22 @@ python run.py --out output\my_leads.docx
 python scripts\fetch_hcad_bulk_data.py 2026
 python scripts\hcad_top_absentee_leads.py
 python run.py --manual-csv output\hcad_top_absentee_leads.csv
+
+# one-time: build the owner-name index that fills in missing addresses
+python scripts\build_hcad_owner_index.py
+python run.py --no-enrich                    # skip that fill-in pass
 ```
 
-## Open the lead dashboard on a phone
+Each run writes two files: `leads_<timestamp>.docx` (the readable report)
+and `leads_<timestamp>.csv` beside it, carrying every field including the
+ones the .docx table has no room for — parcel id, mailing address, match
+confidence, year built, building sqft, source URLs. The dashboard reads
+the .csv.
 
-The current project is a local Python pipeline, so the read-only dashboard
-uses the CSV records already produced by the pipeline. From this folder run:
+## Local dashboard
 
-```powershell
-python app.py
-ipconfig
-```
-
-On a phone connected to the same Wi-Fi, open `http://<IPv4-address>:8765`.
-The dashboard shows the available owner, mailing-address, county, source, and
-absentee evidence. Value, debt, repairs, comps, and buyer demand are shown as
-unknown until those data sources are added. The map geocodes up to 25 visible
-addresses when you press **Load map points** and caches successful lookups in
-`output\geocode_cache.json`.
+Run `python app.py` and open `http://127.0.0.1:8765` on this computer.
+The current edition uses individual map lookup links, not bulk geocoding.
 
 The structured profile and initial signal weights live in
 `intelligence.py` and `knowledge\scoring_config.json`. Edit the JSON weights
@@ -72,9 +238,12 @@ in `audit_logs\intelligence.db` as underwriting inputs and are not presented as
 verified public-record facts.
 
 Output lands in `output\leads_<timestamp>.docx` — sorted by distress
-score descending, with Address / Owner / Distress Score / Sources Hit
-columns. It's a normal Word table: open it and edit freely (add a Notes
-column, mark contacted, delete rows).
+score descending, with Address / Owner / County / Case No / Market Value
+/ Score / Sources Hit / Addr. Source columns, on a landscape page. It's a
+normal Word table: open it and edit freely (add a Notes column, mark
+contacted, delete rows). The **Addr. Source** column says whether an
+address came off a county filing or was derived from the HCAD roll, and
+at what confidence — see "Filling in missing addresses" below.
 
 Every run also logs to `audit_logs\audit.db` (SQLite) — timestamp,
 per-source record counts, and matched-lead count — so drift over time
@@ -200,6 +369,47 @@ County Attorney's office about a bulk data-sharing arrangement.
    pytest
    ```
 
+## Filling in missing addresses (HCAD owner index)
+
+Probate filings name a **deceased owner, never a property** — the county
+docket has no address field at all. `match.py` can attach a probate case
+to a property only when that same owner also turns up in a source that
+does carry an address. Everything else printed `(address unknown — see
+case_no)`, which was the overwhelming majority of probate leads, and the
+.docx did not even have a `case_no` column to go look up. Both fixed:
+
+```powershell
+python scripts\build_hcad_owner_index.py     # a few minutes, ~700MB .db, gitignored
+```
+
+That builds `data\hcad\owner_index.db` from the bulk roll you already
+downloaded — an owner-name → property index over every Harris County
+parcel and **every** owner name line on it, not just the primary, since a
+decedent is often the second name on a joint deed. `enrich.py` then runs
+after matching: for any lead with no address it looks the owner up and
+fills in the address, and for every lead it backfills parcel id, mailing
+address, market value, year built and building size.
+
+Guard rails, because this **derives** an address rather than reading one
+off a filing:
+
+- Scored by `name_match.py`, not raw `fuzz.ratio` — see the next section.
+- Threshold is 93, higher than `match.py`'s 90, and a match must also
+  agree on at least two whole name tokens (surname *and* given name).
+- An owner resolving to more than 3 equally-good parcels is left unknown
+  rather than guessing — that is a portfolio landlord or a common name.
+- Harris County only. The HCAD roll does not cover Nacogdoches, so those
+  leads pass through untouched instead of matching the wrong county's
+  properties.
+- Parcels HCAD parks at street number 0 ("0 IN HARRIS COUNTY") are
+  excluded — nobody can drive to those.
+- Every derived address is labelled in the report's **Addr. Source**
+  column as `HCAD owner match (94%)` against `County filing` for a real
+  one, so the two are never confused. Verify before you door-knock.
+
+The index is optional — without it the pipeline runs exactly as before
+and prints a note telling you what to run.
+
 ## A note on owner-name matching precision
 
 `match.py` joins probate records onto a property by fuzzy-matching
@@ -215,6 +425,45 @@ owner-matching logic, keep this precision-over-recall bias — a wrong
 join here means falsely telling the investor a stranger's estate
 belongs to someone else's property, which is worse than a real match
 landing in the "address unknown" bucket instead.
+
+**Against the HCAD roll specifically, whole-string `fuzz.ratio` is the
+wrong tool**, and `name_match.py` exists to replace it there. The
+appraisal district abbreviates middle names to initials, so correct pairs
+score far too low to act on: `ROWLAND CLYDE FREEMAN` vs HCAD's `FREEMAN
+ROWLAND C` scored 89.5, and `JOSEPH WADE GIACONE` vs `GIACONE JOSEPH W &
+BEVERLY` scored 74.4 — while the *wrong* answer `WADE JOSEPH A JR` beat
+it at 81.2 purely on two shared whole words. `name_match.py` compares
+token to token instead: identical tokens score 100, a single letter
+matching a word's first letter scores 90 (and 0 if it does not — `GEAN`
+is not a match for `C`), anything else falls back to `fuzz.ratio` on that
+pair, and pairing is greedy over all pairs by score rather than in token
+order, since token order is meaningless once `normalize_owner_name` has
+sorted alphabetically.
+
+**Three bugs found by testing against the real roll rather than
+fixtures**, all of which fixtures would have hidden:
+
+1. The index originally deleted any token appearing more than 20,000
+   times, to bound candidate lookups. That pruned `MARIA` to zero rows,
+   so `CASTILLO MARIA SALOME` shared only one indexed token with
+   `CASTILLO MARIA C`, never reached the two-shared-token bar, and
+   returned *no candidates at all* despite the owner sitting right there
+   in the roll. The index now keeps every token and records counts in
+   `owner_token_freq`; lookups bound the work by seeking a name's
+   **rarest** tokens first (`SALOME` appears 73 times, `MARIA` tens of
+   thousands), which costs nothing in recall.
+2. An unpaired whole word in the candidate name only cost 3 points, which
+   let `ADELAIDA GOMEZ PEREZ` match `GOMEZ GUSTAVO A PEREZ` at 93.7 — the
+   `A` paired with `ADELAIDA` by coincidence while the real given name
+   `GUSTAVO` sat unpaired — and `DAVID RODRIGUEZ LOPEZ` match `RODRIGUEZ
+   DARWIN DAVID LOPEZ` at 97.0. An unpaired *word* now costs 12; an
+   unpaired *initial* costs nothing, since HCAD adds initials the filing
+   does not have.
+3. That penalty would have broken genuine joint deeds, so
+   `build_hcad_owner_index.py` splits them on `&` first: `GIACONE JOSEPH
+   W & BEVERLY` is indexed as `GIACONE JOSEPH W` **and** `GIACONE
+   BEVERLY` (plus the original line), so each spouse is reachable on
+   their own name instead of carrying the other as an unexplained token.
 
 ## Anti-detection posture
 
@@ -243,7 +492,10 @@ more established `playwright-stealth` first before this one.
 models.py                    common LeadRecord schema
 normalize.py                 address/owner-name normalization (deterministic)
 match.py                     cross-source fuzzy matching + scoring (deterministic)
-docgen.py                    .docx report generator
+name_match.py                initial-aware person-name scoring (deterministic)
+hcad_owner_index.py          owner-name -> property lookup over the HCAD roll
+enrich.py                    fills missing addresses + HCAD property facts, post-match
+docgen.py                    .docx report generator + full-field .csv sidecar
 audit_log.py                 SQLite run-history log
 run.py                       orchestrator (ties everything together)
 site_adapters/
@@ -257,12 +509,13 @@ site_adapters/
 data/hcad/                   HCAD bulk download cache (gitignored, ~1.3GB) — see fetch_hcad_bulk_data.py
 scripts/
   fetch_hcad_bulk_data.py
+  build_hcad_owner_index.py      builds the owner-name index (gitignored, ~700MB)
   hcad_top_absentee_leads.py
   pull_foreclosure_postings.py
   check_adapter_consistency.py
   check_pipeline_determinism.py
   pull_foreclosure_postings.py   standalone: python pull_foreclosure_postings.py <year> <month>
-tests/                       pytest unit tests (normalize, match, docgen, manual_import)
+tests/                       pytest unit tests (normalize, match, name_match, enrich, docgen, manual_import)
 audit_logs/audit.db          created on first run
 output/                      generated .docx reports, created on first run
 ```

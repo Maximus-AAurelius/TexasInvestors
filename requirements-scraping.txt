@@ -1,0 +1,3 @@
+-r requirements.txt
+# Optional HTML parser from https://github.com/D4Vinci/Scrapling
+scrapling==0.4.15

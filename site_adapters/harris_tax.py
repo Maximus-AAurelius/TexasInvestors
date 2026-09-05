@@ -64,7 +64,7 @@ class HarrisTaxDelinquentAdapter(BaseAdapter):
         # --- END SEARCH SECTION ---
 
         self._jitter_sleep()
-        return scrape_grid(page, "table", COLUMN_MAP)
+        return scrape_grid(page, COLUMN_MAP, table_selector="table")
 
     def to_record(self, row: dict) -> LeadRecord:
         amount_owed = None

@@ -14,7 +14,7 @@ Two passes, because not every source carries a property address:
 distress_score = count of distinct source_types in the final cluster.
 """
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 from rapidfuzz import fuzz
 
@@ -41,6 +41,13 @@ OWNER_MATCH_THRESHOLD = 90
 UNKNOWN_ADDRESS_LABEL = "(address unknown — see case_no)"
 
 
+# How the Address column got filled, so the investor can tell a
+# county-filed address from one this pipeline inferred.
+ADDRESS_SOURCE_FILED = "filed"          # came straight off the source record
+ADDRESS_SOURCE_HCAD = "hcad_owner"      # recovered from the HCAD roll by owner name
+ADDRESS_SOURCE_UNKNOWN = "unknown"      # still not recoverable
+
+
 @dataclass
 class MatchedLead:
     address: str
@@ -49,6 +56,38 @@ class MatchedLead:
     distress_score: int
     sources_hit: List[str]
     records: List[LeadRecord] = field(default_factory=list)
+
+    # Filled by enrich.py after clustering; defaults keep every existing
+    # caller (and every test that builds a MatchedLead positionally)
+    # working unchanged.
+    address_source: str = ADDRESS_SOURCE_FILED
+    address_confidence: Optional[float] = None
+    parcel_id: Optional[str] = None
+    mailing_address: Optional[str] = None
+    market_value: Optional[float] = None
+    year_built: Optional[int] = None
+    building_sqft: Optional[int] = None
+    hcad_matched_owner: Optional[str] = None
+
+    @property
+    def case_numbers(self) -> str:
+        """Every case_no in the cluster, comma-joined. The report used to
+        tell the reader to "see case_no" without carrying a case_no
+        column; this is what that column reads from.
+        """
+        seen = []
+        for rec in self.records:
+            if rec.case_no and rec.case_no not in seen:
+                seen.append(rec.case_no)
+        return ", ".join(seen)
+
+    @property
+    def source_urls(self) -> str:
+        seen = []
+        for rec in self.records:
+            if rec.source_url and rec.source_url not in seen:
+                seen.append(rec.source_url)
+        return ", ".join(seen)
 
 
 def _block_key(county: str, normalized_addr: str) -> str:
@@ -124,6 +163,7 @@ def cluster_records(records: List[LeadRecord]) -> List[MatchedLead]:
     for probate_rec in unaddressed:
         probate_norm = normalize_owner_name(probate_rec.owner_name)
         best_group_i, best_score = None, 0
+        tied_groups = set()
         for gi, group in enumerate(groups):
             if group[0].county != probate_rec.county:
                 continue
@@ -133,7 +173,10 @@ def cluster_records(records: List[LeadRecord]) -> List[MatchedLead]:
                 score = fuzz.ratio(probate_norm, owner_norm)
                 if score > best_score:
                     best_score, best_group_i = score, gi
-        if best_score >= OWNER_MATCH_THRESHOLD:
+                    tied_groups = {gi}
+                elif score == best_score:
+                    tied_groups.add(gi)
+        if best_score >= OWNER_MATCH_THRESHOLD and len(tied_groups) == 1:
             groups[best_group_i].append(probate_rec)
         else:
             leftover_probate.append(probate_rec)
@@ -161,6 +204,7 @@ def cluster_records(records: List[LeadRecord]) -> List[MatchedLead]:
             distress_score=1,
             sources_hit=[rec.source_type],
             records=[rec],
+            address_source=ADDRESS_SOURCE_UNKNOWN,
         ))
 
     # stable sort: distress_score desc, then address asc for deterministic tie-breaking

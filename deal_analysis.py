@@ -1,74 +1,66 @@
-"""Transparent deal calculations for manual underwriting scenarios."""
-
-
-def _number(values, key):
-    value = values.get(key)
-    return float(value) if value not in (None, "") else None
+﻿"""Scenario estimates; public appraisal and missing debt never imply equity."""
+from underwriting import CHECK_FIELDS, validate_underwriting
 
 
 def calculate_deal(underwriting):
-    """Calculate scenario economics without filling missing assumptions."""
-    arv = {key: _number(underwriting, key) for key in ("arv_low", "arv_base", "arv_high")}
-    repairs = {key: _number(underwriting, key) for key in ("repairs_low", "repairs_expected", "repairs_high")}
-    transaction_costs = _number(underwriting, "transaction_costs")
-    buyer_margin = _number(underwriting, "buyer_margin")
-    risk_adjustment = _number(underwriting, "risk_adjustment")
-    buyer_price = _number(underwriting, "buyer_price")
-    contract_price = _number(underwriting, "contract_price")
-
-    missing = []
-    for key, values in (("ARV", arv), ("repairs", repairs)):
-        if any(value is None for value in values.values()):
-            missing.append(key)
-    for key, value in (("transaction costs", transaction_costs), ("buyer margin", buyer_margin), ("risk adjustment", risk_adjustment)):
-        if value is None:
-            missing.append(key)
-
+    try:
+        values = validate_underwriting(underwriting)
+    except ValueError as exc:
+        return {"status": "invalid", "scenarios": {}, "gross_spread": None,
+                "estimated_assignment_fee": None, "estimated_net_spread": None,
+                "deal_gap": None, "risk_warnings": [str(exc)],
+                "recommendation": "RESEARCH FIRST", "assumptions": {}}
+    required = ("arv_low", "arv_base", "arv_high", "repairs_low", "repairs_expected",
+                "repairs_high", "transaction_costs", "buyer_margin", "risk_adjustment")
+    missing = [key.replace("_", " ") for key in required if values[key] is None]
+    warnings = ["Missing assumptions: " + ", ".join(missing)] if missing else []
     scenarios = {}
     if not missing:
-        scenarios = {
-            "conservative": {"arv": arv["arv_low"], "repairs": repairs["repairs_high"]},
-            "base": {"arv": arv["arv_base"], "repairs": repairs["repairs_expected"]},
-            "optimistic": {"arv": arv["arv_high"], "repairs": repairs["repairs_low"]},
-        }
-        for scenario in scenarios.values():
-            scenario["maximum_acquisition"] = round(scenario["arv"] - scenario["repairs"] - transaction_costs - buyer_margin - risk_adjustment, 2)
-
-    gross_spread = None
-    deal_gap = None
-    if buyer_price is not None and contract_price is not None:
-        gross_spread = round(buyer_price - contract_price - (transaction_costs or 0), 2)
-    if contract_price is not None and scenarios.get("base"):
-        deal_gap = round(contract_price - scenarios["base"]["maximum_acquisition"], 2)
-
-    warnings = []
-    if missing:
-        warnings.append("Missing assumptions: " + ", ".join(missing))
-    if scenarios and scenarios["conservative"]["maximum_acquisition"] < 0:
-        warnings.append("Conservative case produces a negative maximum acquisition price")
-    if deal_gap is not None and deal_gap > 0:
-        warnings.append(f"Contract price is ${deal_gap:,.0f} above the base maximum acquisition")
-    if buyer_price is None or contract_price is None:
-        warnings.append("Buyer and contract prices are needed to estimate spread")
-
-    if missing:
-        recommendation = "RESEARCH FIRST"
-    elif gross_spread is not None and gross_spread <= 0:
-        recommendation = "SKIP"
-    elif deal_gap is not None and deal_gap > 0:
-        recommendation = "RESEARCH FIRST"
-    elif buyer_price is None:
-        recommendation = "FIND BUYER"
+        for name, arv, repairs in (("conservative", "arv_low", "repairs_high"),
+                                   ("base", "arv_base", "repairs_expected"),
+                                   ("optimistic", "arv_high", "repairs_low")):
+            ceiling = round(values[arv] - values[repairs] - values["transaction_costs"]
+                            - values["buyer_margin"] - values["risk_adjustment"], 2)
+            fee = values["target_assignment_fee"]
+            scenarios[name] = {"arv": values[arv], "repairs": values[repairs],
+                               "maximum_acquisition": ceiling,
+                               "maximum_seller_price": round(ceiling - fee, 2) if fee is not None else None}
+    buyer, contract = values["buyer_price"], values["contract_price"]
+    gross = round(buyer - contract, 2) if buyer is not None and contract is not None else None
+    costs = values["assignment_costs"]
+    net = round(gross - costs, 2) if gross is not None and costs is not None else None
+    gap = round(buyer - scenarios["base"]["maximum_acquisition"], 2) if buyer is not None and scenarios else None
+    current, debt = values["current_value"], values["estimated_debt"]
+    equity = round(current - debt, 2) if current is not None and debt is not None else None
+    if buyer is None or contract is None:
+        warnings.append("Buyer and contract prices are needed to estimate assignment fee")
+    if costs is None:
+        warnings.append("Your assignment costs are unknown; net proceeds are not calculated")
+    if equity is None:
+        warnings.append("Equity is unknown until current value and debt are supplied")
     else:
-        recommendation = "VERIFY EQUITY"
-
-    return {
-        "scenarios": scenarios,
-        "gross_spread": gross_spread,
-        "estimated_assignment_fee": gross_spread,
-        "deal_gap": deal_gap,
-        "risk_warnings": warnings,
-        "recommendation": recommendation,
-        "assumptions": {"transaction_costs": transaction_costs, "buyer_margin": buyer_margin, "risk_adjustment": risk_adjustment},
-        "status": "calculated" if scenarios else "incomplete",
-    }
+        warnings.append("Equity is a manual estimate before selling costs and any omitted liens")
+    if scenarios and scenarios["conservative"]["maximum_acquisition"] < 0:
+        warnings.append("Conservative case produces a negative buyer acquisition ceiling")
+    if gap is not None and gap > 0:
+        warnings.append(f"Buyer price exceeds base acquisition ceiling by ${gap:,.0f}")
+    if buyer is not None and scenarios and buyer > scenarios["conservative"]["maximum_acquisition"]:
+        warnings.append("Buyer price does not meet the conservative scenario margin")
+    unchecked = [key for key in CHECK_FIELDS if not values[key]]
+    if unchecked:
+        warnings.append("Due diligence remains: " + ", ".join(key.replace("_", " ") for key in unchecked))
+    if missing or contract is None:
+        action = "RESEARCH FIRST"
+    elif (gross is not None and gross <= 0) or (net is not None and net <= 0):
+        action = "RENEGOTIATE OR SKIP"
+    elif gap is not None and gap > 0:
+        action = "RENEGOTIATE"
+    elif buyer is None:
+        action = "FIND BUYER"
+    else:
+        action = "VERIFY WITH TITLE COMPANY"
+    return {"scenarios": scenarios, "gross_spread": gross, "estimated_assignment_fee": gross,
+            "estimated_net_spread": net, "estimated_equity": equity, "deal_gap": gap,
+            "risk_warnings": warnings, "recommendation": action,
+            "assumptions": {key: values[key] for key in ("transaction_costs", "buyer_margin", "risk_adjustment", "assignment_costs", "target_assignment_fee")},
+            "due_diligence_complete": not unchecked, "status": "calculated" if scenarios else "incomplete"}

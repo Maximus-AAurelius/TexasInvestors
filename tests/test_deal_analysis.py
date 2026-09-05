@@ -12,9 +12,10 @@ def test_deal_scenarios_and_spread():
     assert result["scenarios"]["conservative"]["maximum_acquisition"] == 170000
     assert result["scenarios"]["base"]["maximum_acquisition"] == 235000
     assert result["scenarios"]["optimistic"]["maximum_acquisition"] == 280000
-    assert result["gross_spread"] == 40000
-    assert result["estimated_assignment_fee"] == 40000
-    assert result["deal_gap"] == -40000
+    assert result["gross_spread"] == 45000
+    assert result["estimated_assignment_fee"] == 45000
+    assert result["estimated_net_spread"] is None
+    assert result["deal_gap"] == 5000
 
 
 def test_incomplete_deal_does_not_invent_economics():

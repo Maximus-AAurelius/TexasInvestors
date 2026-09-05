@@ -90,14 +90,21 @@ def build_profile(lead: dict[str, Any], config: Optional[ScoringConfig] = None) 
     sources = list(lead.get("sources", []))
     mailing = lead.get("mailing_address") or None
     out_of_state = bool(mailing and mailing != "Unknown" and " TX " not in f" {mailing.upper()} ")
-    signals = [{"type": "absentee_owner", "label": "Absentee owner", "state": "DERIVED"}]
+    signals = []
+    if "absentee_owner" in sources:
+        signals.append({"type": "absentee_owner", "label": "Possible absentee owner (source record)", "state": "DERIVED"})
+    for source, signal, label in (("probate", "probate", "Probate filing; ownership and authority need review"),
+                                   ("trustee_sale", "foreclosure", "Trustee notice; current sale status needs review"),
+                                   ("tax_delinquent", "tax_delinquent", "Tax record; current balance needs review")):
+        if source in sources:
+            signals.append({"type": signal, "label": label, "state": "REPORTED"})
     if out_of_state:
         signals.append({"type": "out_of_state_mailing", "label": "Out-of-state mailing address", "state": "DERIVED"})
     hcad = lead.get("hcad") or {}
     if hcad.get("ownership_duration_years") is not None and hcad["ownership_duration_years"] >= 10:
         signals.append({"type": "long_ownership", "label": f"{hcad['ownership_duration_years']} years since recorded ownership change", "state": "DERIVED"})
     motivation, positive = _score_signals(signals, config)
-    source_confidence = min(100, len(sources) * 20 + (20 if mailing else 0) + (25 if hcad else 0))
+    source_confidence = min(100, len(sources) * 20 + (20 if mailing and mailing != "Unknown" else 0) + (25 if hcad else 0))
     scores = {
         "distress": None,
         "motivation": motivation,
@@ -123,7 +130,7 @@ def build_profile(lead: dict[str, Any], config: Optional[ScoringConfig] = None) 
         property_id=lead["id"], address=lead["address"], county=lead["county"],
         owner_name=lead["owner_name"], mailing_address=mailing, sources=sources,
         source_files=list(lead.get("source_files", [])),
-        data_states={"identity": "VERIFIED", "mailing_address": "VERIFIED" if mailing else "UNKNOWN", "motivation": "INFERRED"},
+        data_states={"identity": "REPORTED", "mailing_address": "REPORTED" if mailing and mailing != "Unknown" else "UNKNOWN", "motivation": "INFERRED"},
         signals=signals, property_facts=hcad, scores=scores, explanations=explanations, deal=deal, data_gaps=gaps,
         recommendation="RESEARCH FIRST", calculated_at=lead.get("calculated_at", ""),
     )

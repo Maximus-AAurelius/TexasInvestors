@@ -4,24 +4,36 @@ swings usually mean a broken parser, not real data change.
 
 Usage (PowerShell, from the project root):
     python scripts\\check_adapter_consistency.py harris_probate
-    python scripts\\check_adapter_consistency.py nacogdoches_tax --runs 3
+    python scripts\\check_adapter_consistency.py harris_foreclosure --runs 3
+
+This script could not import at all before 2026-09-03: it named a class
+`HarrisTrusteeSaleAdapter` that had since been renamed to
+`HarrisForeclosurePostingsAdapter`, and a `site_adapters.nacogdoches_tax`
+module that does not exist (only a stale .pyc in __pycache__ suggested it
+ever had). Adapters are registered as factories now, because they do not
+share a constructor signature -- the foreclosure adapter needs a year and
+month, the probate adapter a lookback window.
 """
 import argparse
 import sys
 import time
+from datetime import date
 
 sys.path.insert(0, ".")
 
 from site_adapters.harris_probate import HarrisProbateAdapter
 from site_adapters.harris_tax import HarrisTaxDelinquentAdapter
-from site_adapters.harris_trustee_sale import HarrisTrusteeSaleAdapter
-from site_adapters.nacogdoches_tax import NacogdochesTaxAdapter
+from site_adapters.harris_trustee_sale import HarrisForeclosurePostingsAdapter
+
+TODAY = date.today()
 
 ADAPTERS = {
-    "harris_tax": HarrisTaxDelinquentAdapter,
-    "harris_probate": HarrisProbateAdapter,
-    "harris_trustee_sale": HarrisTrusteeSaleAdapter,
-    "nacogdoches_tax": NacogdochesTaxAdapter,
+    "harris_probate": lambda headless: HarrisProbateAdapter(headless=headless),
+    # reCAPTCHA-gated, so this will fail. Registered anyway so the failure
+    # is explicit rather than the adapter silently going unchecked.
+    "harris_tax": lambda headless: HarrisTaxDelinquentAdapter(headless=headless),
+    "harris_foreclosure": lambda headless: HarrisForeclosurePostingsAdapter(
+        year=TODAY.year, month=TODAY.month, headless=headless),
 }
 
 TOLERANCE = 0.05
@@ -36,8 +48,8 @@ def main():
 
     counts = []
     for i in range(args.runs):
-        adapter = ADAPTERS[args.adapter](headless=not args.headed)
-        records = adapter.run()
+        adapter = ADAPTERS[args.adapter](not args.headed)
+        records = adapter.fetch_postings() if isinstance(adapter, HarrisForeclosurePostingsAdapter) else adapter.run()
         counts.append(len(records))
         print(f"run {i + 1}: {len(records)} records")
         if i < args.runs - 1:

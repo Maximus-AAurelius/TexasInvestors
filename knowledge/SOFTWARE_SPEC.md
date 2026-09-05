@@ -4,6 +4,11 @@
 
 Texas Investors is an evidence-first property intelligence and underwriting
 workspace for a solo wholesaler operating primarily in Harris County, Texas.
+The confirmed transaction model is assignment of purchase contracts. Target markets
+are Harris (primary), Fort Bend, Montgomery, Brazoria, Galveston, Waller, Liberty,
+Chambers, and Nacogdoches. `markets.py` is the shared configuration for imports,
+buyer criteria and dashboard filters. County support does not imply an automated
+feed: counties outside Harris currently use manual CSV / saved HTML imports.
 It helps answer: **which properties deserve my next research or contact hour?**
 
 ## Source hierarchy

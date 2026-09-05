@@ -28,7 +28,8 @@ from datetime import datetime
 from pathlib import Path
 
 from audit_log import log_run
-from docgen import write_docx
+from docgen import write_csv, write_docx
+from enrich import enrich_leads
 from match import cluster_records
 from models import LeadRecord, SOURCE_TAX_DELINQUENT
 from site_adapters.absentee_owner import derive_absentee_owner_records
@@ -59,6 +60,9 @@ def main():
     parser.add_argument("--manual-csv", action="append", default=[],
                          help="path to a manually-collected CSV (repeatable) — see "
                               "site_adapters/manual_import.py for the expected columns")
+    parser.add_argument("--no-enrich", action="store_true",
+                         help="skip the HCAD address-recovery/backfill pass")
+    parser.add_argument("--offline", action="store_true", help="use only manual CSVs and local HCAD data; no website requests")
     args = parser.parse_args()
 
     headless = not args.headed
@@ -70,6 +74,8 @@ def main():
     adapters = [
         ("harris_probate", HarrisProbateAdapter(lookback_days=lookback, headless=headless)),
     ]
+    if args.offline:
+        adapters = []
 
     for label, adapter in adapters:
         records = run_adapter_safely(adapter, label)
@@ -91,10 +97,31 @@ def main():
     matched = cluster_records(all_records)
     print(f"Matched leads: {len(matched)}")
 
+    # Recover addresses for probate leads and backfill HCAD property facts
+    # before writing, so the report has no cells pointing at data it does
+    # not carry.
+    if args.no_enrich:
+        print("[enrich] skipped (--no-enrich)")
+    else:
+        stats = enrich_leads(matched)
+        if not stats["index_available"]:
+            print("[enrich] HCAD owner index not built — run "
+                  "scripts\build_hcad_owner_index.py to recover unknown addresses",
+                  file=sys.stderr)
+        else:
+            print(f"[enrich] {stats['addresses_recovered']} addresses recovered from HCAD, "
+                  f"{stats['facts_backfilled']} leads got property facts, "
+                  f"{stats['unknown_after']} still unknown "
+                  f"(was {stats['unknown_before']})")
+        source_counts["enriched_addresses"] = stats["addresses_recovered"]
+
     OUTPUT_DIR.mkdir(exist_ok=True)
     out_path = args.out or str(OUTPUT_DIR / f"leads_{datetime.now().strftime('%Y%m%d_%H%M')}.docx")
     write_docx(matched, out_path)
+    csv_path = str(Path(out_path).with_suffix(".csv"))
+    write_csv(matched, csv_path)
     print(f"Wrote {out_path}")
+    print(f"Wrote {csv_path}")
 
     log_run(source_counts, len(matched))
 

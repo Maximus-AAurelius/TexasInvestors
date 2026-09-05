@@ -1,11 +1,11 @@
 import os
 
-from docgen import write_docx, COL_WIDTHS_DXA
+from docgen import write_csv, write_docx, COL_WIDTHS_DXA, USABLE_WIDTH_DXA
 from match import MatchedLead
 
 
 def test_column_widths_sum_to_usable_page_width():
-    assert sum(COL_WIDTHS_DXA.values()) == 9360
+    assert sum(COL_WIDTHS_DXA.values()) == USABLE_WIDTH_DXA
 
 
 def test_writes_valid_docx(tmp_path):
